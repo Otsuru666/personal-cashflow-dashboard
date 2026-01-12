@@ -542,32 +542,6 @@ const App = () => {
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-3">
-            <div className="flex items-center rounded-full border border-white/70 bg-white/70 p-1 text-xs font-semibold text-slate-500">
-              <button
-                type="button"
-                onClick={() => {
-                  setActiveView(VIEW_MONTHLY);
-                  writeLocalStorage(VIEW_STORAGE_KEY, VIEW_MONTHLY);
-                }}
-                className={`rounded-full px-3 py-1 transition ${
-                  activeView === VIEW_MONTHLY ? 'bg-emerald-600 text-white' : 'text-slate-500'
-                }`}
-              >
-                月次ビュー
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setActiveView(VIEW_ANNUAL);
-                  writeLocalStorage(VIEW_STORAGE_KEY, VIEW_ANNUAL);
-                }}
-                className={`rounded-full px-3 py-1 transition ${
-                  activeView === VIEW_ANNUAL ? 'bg-emerald-600 text-white' : 'text-slate-500'
-                }`}
-              >
-                年間ビュー
-              </button>
-            </div>
             <div
               className="flex items-center gap-2 rounded-2xl border border-white/70 bg-white/80 px-3 py-2 text-sm text-slate-600"
               style={{ boxShadow: 'var(--shadow)' }}
@@ -614,6 +588,43 @@ const App = () => {
             </button>
           </div>
         </header>
+
+        <div
+          className="mt-6 flex flex-wrap items-center gap-3 rounded-3xl border border-white/70 bg-white/80 p-2 backdrop-blur"
+          style={{ boxShadow: 'var(--shadow)' }}
+        >
+          <button
+            type="button"
+            onClick={() => {
+              setActiveView(VIEW_MONTHLY);
+              writeLocalStorage(VIEW_STORAGE_KEY, VIEW_MONTHLY);
+            }}
+            className={`flex-1 rounded-2xl px-4 py-2 text-sm font-semibold transition sm:flex-none ${
+              activeView === VIEW_MONTHLY
+                ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-200'
+                : 'text-slate-500 hover:bg-white'
+            }`}
+          >
+            月次ビュー
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setActiveView(VIEW_ANNUAL);
+              writeLocalStorage(VIEW_STORAGE_KEY, VIEW_ANNUAL);
+            }}
+            className={`flex-1 rounded-2xl px-4 py-2 text-sm font-semibold transition sm:flex-none ${
+              activeView === VIEW_ANNUAL
+                ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-200'
+                : 'text-slate-500 hover:bg-white'
+            }`}
+          >
+            年間ビュー
+          </button>
+          <div className="ml-auto hidden text-xs text-slate-400 sm:block">
+            表示を切り替えて月次/年間を確認
+          </div>
+        </div>
 
         {!report.hasRows && (
           <div
