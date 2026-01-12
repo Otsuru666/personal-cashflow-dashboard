@@ -38,6 +38,17 @@ const TYPE_INCOME = '収入';
 const TYPE_EXPENSE = '支出';
 const TYPE_ADJUST = '調整';
 
+const INCOME_HINTS = ['収入', '給与', '給料', '賞与', 'ボーナス', '入金'];
+const EXPENSE_HINTS = ['支出', '出金', '支払', '立替'];
+const ADJUST_HINTS = ['調整', '返金', '振替', '相殺'];
+const COHABITATION_PAYMENT_HINTS = ['同棲費用'];
+const INSTALLMENT_ITEMS = [
+  { name: 'オスカー30回分', amount: 6865, completionDate: '2026年7月27日' },
+  { name: 'テンピュール', amount: 11973, completionDate: '2027年6月27日' },
+  { name: 'コンサル費用', amount: 20686, completionDate: '2026年5月27日' }
+];
+const INSTALLMENT_DEFAULT_TOTAL = INSTALLMENT_ITEMS.reduce((sum, item) => sum + item.amount, 0);
+
 const COLORS = ['#0F766E', '#10B981', '#F59E0B', '#F97316', '#60A5FA', '#34D399', '#F43F5E'];
 const DEFAULT_GAS_URL =
   'https://script.google.com/macros/s/AKfycbxBbgtIC0A7rmRO-TxoQfSJgpagbSmN8GP0Ui_6AtfGQB40ZzMVvE8-EvzYePpoe4Rc/exec';
@@ -69,9 +80,33 @@ const parseAmount = (value) => {
   return Number.isNaN(parsed) ? 0 : parsed;
 };
 
+const normalizeText = (value) => String(value || '').replace(/[\s　]+/g, '').trim();
+
+const buildHintSource = (...values) =>
+  values
+    .map((value) => normalizeText(value))
+    .filter(Boolean)
+    .join(' ');
+
+const hasHint = (text, hints) => hints.some((hint) => text.includes(hint));
+
+const isSubscriptionRow = (row, type) => {
+  if (type !== TYPE_EXPENSE) return false;
+  const major = normalizeText(row['大項目']);
+  const sub = normalizeText(row['中項目']);
+  const content = normalizeText(row['内容']);
+  return major.includes('通信費') && (sub.includes('サブスク') || content.includes('サブスク'));
+};
+
 const getType = (row) => {
-  const raw = String(row['区分'] || '').trim();
+  const raw = normalizeText(row['区分']);
   if ([TYPE_INCOME, TYPE_EXPENSE, TYPE_ADJUST].includes(raw)) return raw;
+
+  const hintSource = buildHintSource(raw, row['大項目'], row['中項目'], row['内容']);
+
+  if (hasHint(hintSource, ADJUST_HINTS)) return TYPE_ADJUST;
+  if (hasHint(hintSource, INCOME_HINTS)) return TYPE_INCOME;
+  if (hasHint(hintSource, EXPENSE_HINTS)) return TYPE_EXPENSE;
   return TYPE_EXPENSE;
 };
 
@@ -83,6 +118,7 @@ const formatSignedYen = (value) => {
 };
 
 const getGirlfriendAdvanceKey = (year, month) => `girlfriend_advance_${year}-${month}`;
+const getInstallmentKey = (year, month) => `installment_adjust_${year}-${month}`;
 
 const isTargetRow = (row) => String(row['計算対象'] || '').trim() === '1';
 
@@ -105,17 +141,20 @@ const buildChartData = (map, limit = 6) => {
   return [...major, { name: 'その他', value: restValue }];
 };
 
-const summarizeMonth = (rows, girlfriendAdvanceValue) => {
+const summarizeMonth = (rows, girlfriendAdvanceValue, installmentDeduction) => {
   let incomeTotal = 0;
   let expenseTotal = 0;
   let adjustTotal = 0;
   let sharedTotal = 0;
   let fullReimburseTotal = 0;
+  let girlfriendPaidActual = 0;
 
   const ledgerDetails = [];
   const sharedDetails = [];
   const fullReimburseDetails = [];
   const expenseBySubcategory = {};
+  const subscriptionDetails = [];
+  let subscriptionTotal = 0;
 
   rows.forEach((row) => {
     const type = getType(row);
@@ -137,13 +176,24 @@ const summarizeMonth = (rows, girlfriendAdvanceValue) => {
 
     ledgerDetails.push(detail);
 
-    if (type === TYPE_INCOME) incomeTotal += amountAbs;
+    if (type === TYPE_INCOME) {
+      incomeTotal += amountAbs;
+      const paymentHintSource = buildHintSource(row['大項目'], row['中項目'], row['内容']);
+      if (hasHint(paymentHintSource, COHABITATION_PAYMENT_HINTS)) {
+        girlfriendPaidActual += amountAbs;
+      }
+    }
     if (type === TYPE_EXPENSE) expenseTotal += amountAbs;
     if (type === TYPE_ADJUST) adjustTotal += amountRaw;
 
     if (type === TYPE_EXPENSE) {
       const key = subcategory || category || '未分類';
       expenseBySubcategory[key] = (expenseBySubcategory[key] || 0) + amountAbs;
+
+      if (isSubscriptionRow(row, type)) {
+        subscriptionTotal += amountAbs;
+        subscriptionDetails.push(detail);
+      }
 
       if (!subcategory.includes('自費')) {
         if (subcategory === FULL_REIMBURSE_SUBCATEGORY) {
@@ -163,7 +213,8 @@ const summarizeMonth = (rows, girlfriendAdvanceValue) => {
   const girlfriendAdvanceHalf = Math.floor(girlfriendAdvanceValue / 2);
   const girlfriendPayment = totalBilling - girlfriendAdvanceHalf;
   const ledgerNet = incomeTotal - expenseTotal + adjustTotal;
-  const actualNet = ledgerNet + girlfriendPayment;
+  const unpaidGap = girlfriendPayment - girlfriendPaidActual;
+  const actualNet = ledgerNet + unpaidGap - installmentDeduction;
 
   return {
     ledger: {
@@ -176,6 +227,7 @@ const summarizeMonth = (rows, girlfriendAdvanceValue) => {
       totalBilling,
       myAdvanceTotal,
       girlfriendPayment,
+      girlfriendPaidActual,
       summary: {
         rent: RENT_AND_UTILITIES_FIXED,
         shared: sharedTotal,
@@ -187,12 +239,16 @@ const summarizeMonth = (rows, girlfriendAdvanceValue) => {
     },
     actual: {
       net: actualNet,
-      gap: actualNet - ledgerNet
+      gap: unpaidGap - installmentDeduction
     },
     expenseBySubcategory,
     details: {
       ledger: ledgerDetails.sort((a, b) => new Date(b.date) - new Date(a.date)),
       shared: [...sharedDetails, ...fullReimburseDetails].sort((a, b) => new Date(b.date) - new Date(a.date))
+    },
+    subscription: {
+      total: subscriptionTotal,
+      details: subscriptionDetails.sort((a, b) => new Date(b.date) - new Date(a.date))
     }
   };
 };
@@ -212,12 +268,27 @@ const App = () => {
   const [girlfriendAdvanceInput, setGirlfriendAdvanceInput] = useState(() => {
     return readLocalStorage(getGirlfriendAdvanceKey(new Date().getFullYear(), new Date().getMonth() + 1)) || '';
   });
+  const [installmentAdjustInput, setInstallmentAdjustInput] = useState(() => {
+    return (
+      readLocalStorage(getInstallmentKey(new Date().getFullYear(), new Date().getMonth() + 1)) ??
+      String(INSTALLMENT_DEFAULT_TOTAL)
+    );
+  });
 
   const girlfriendAdvance = useMemo(() => parseYenInput(girlfriendAdvanceInput), [girlfriendAdvanceInput]);
+  const installmentDeduction = useMemo(
+    () => parseYenInput(installmentAdjustInput),
+    [installmentAdjustInput]
+  );
 
   useEffect(() => {
     const stored = readLocalStorage(getGirlfriendAdvanceKey(selectedYear, selectedMonth));
     setGirlfriendAdvanceInput(stored || '');
+  }, [selectedYear, selectedMonth]);
+
+  useEffect(() => {
+    const stored = readLocalStorage(getInstallmentKey(selectedYear, selectedMonth));
+    setInstallmentAdjustInput(stored ?? String(INSTALLMENT_DEFAULT_TOTAL));
   }, [selectedYear, selectedMonth]);
 
   const availableYears = useMemo(() => {
@@ -275,13 +346,13 @@ const App = () => {
   const report = useMemo(() => {
     if (!data) return null;
     const filtered = data.filter((row) => isTargetRow(row) && isSameMonth(row, selectedYear, selectedMonth));
-    const summary = summarizeMonth(filtered, girlfriendAdvance);
+    const summary = summarizeMonth(filtered, girlfriendAdvance, installmentDeduction);
     return {
       ...summary,
       expenseChart: buildChartData(summary.expenseBySubcategory),
       hasRows: filtered.length > 0
     };
-  }, [data, selectedYear, selectedMonth, girlfriendAdvance]);
+  }, [data, selectedYear, selectedMonth, girlfriendAdvance, installmentDeduction]);
 
   const monthlySeries = useMemo(() => {
     if (!data) return [];
@@ -289,14 +360,21 @@ const App = () => {
       const month = index + 1;
       const monthRows = data.filter((row) => isTargetRow(row) && isSameMonth(row, selectedYear, month));
       const storedAdvance = readLocalStorage(getGirlfriendAdvanceKey(selectedYear, month)) || '';
-      const summary = summarizeMonth(monthRows, parseYenInput(storedAdvance));
+      const storedInstallment = readLocalStorage(getInstallmentKey(selectedYear, month));
+      const installmentValue =
+        storedInstallment ?? String(INSTALLMENT_DEFAULT_TOTAL);
+      const summary = summarizeMonth(
+        monthRows,
+        parseYenInput(storedAdvance),
+        parseYenInput(installmentValue)
+      );
       return {
         label: `${month}月`,
         ledgerNet: summary.ledger.net,
         actualNet: summary.actual.net
       };
     });
-  }, [data, selectedYear, girlfriendAdvanceInput]);
+  }, [data, selectedYear, girlfriendAdvanceInput, installmentAdjustInput]);
 
   const saveConfig = (event) => {
     event.preventDefault();
@@ -534,7 +612,7 @@ const App = () => {
             >
               {formatSignedYen(report.actual.net)}
             </p>
-            <p className="mt-2 text-xs text-slate-500">帳簿上 + 彼女の支払額</p>
+            <p className="mt-2 text-xs text-slate-500">帳簿上 + 彼女の支払額 - 入金済み - 分割控除</p>
           </div>
 
           <div
@@ -558,7 +636,7 @@ const App = () => {
             >
               {formatSignedYen(report.actual.gap)}
             </p>
-            <p className="mt-2 text-xs text-slate-500">同棲費用の徴収見込み</p>
+            <p className="mt-2 text-xs text-slate-500">未収/過収と分割控除の影響</p>
           </div>
 
           <div
@@ -647,6 +725,38 @@ const App = () => {
               <p className="text-xs font-semibold text-emerald-700">帳簿上収支</p>
               <p className="mt-1 text-xl font-semibold text-emerald-700">{formatSignedYen(report.ledger.net)}</p>
             </div>
+            <div className="mt-6 rounded-2xl border border-slate-100 bg-slate-50 px-4 py-4">
+              <div className="flex items-center justify-between text-xs text-slate-500">
+                <span className="font-semibold text-slate-600">分割払い補正</span>
+                <span>未計上のカード引落</span>
+              </div>
+              <div className="mt-3 flex items-center gap-2">
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-2 text-right text-sm text-slate-600 focus:border-emerald-300 focus:outline-none"
+                  placeholder={`例: ${INSTALLMENT_DEFAULT_TOTAL.toLocaleString()}`}
+                  value={installmentAdjustInput}
+                  onChange={(event) => {
+                    const cleaned = event.target.value.replace(/[^0-9]/g, '');
+                    setInstallmentAdjustInput(cleaned);
+                    writeLocalStorage(getInstallmentKey(selectedYear, selectedMonth), cleaned);
+                  }}
+                />
+                <span className="text-xs font-semibold text-slate-600">円</span>
+              </div>
+              <div className="mt-3 space-y-2 text-xs text-slate-500">
+                {INSTALLMENT_ITEMS.map((item) => (
+                  <div key={item.name} className="rounded-2xl border border-slate-100 bg-white/80 px-3 py-2">
+                    <div className="flex items-center justify-between text-xs text-slate-600">
+                      <span className="font-semibold">{item.name}</span>
+                      <span>{formatYen(item.amount)}</span>
+                    </div>
+                    <div className="mt-1 text-[10px] text-slate-400">完了予定: {item.completionDate}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
         </section>
 
@@ -716,6 +826,22 @@ const App = () => {
                 <span>彼女の支払額</span>
                 <span className="font-semibold text-emerald-700">{formatYen(report.billing.girlfriendPayment)}</span>
               </div>
+              <div className="flex items-center justify-between">
+                <span>入金済み</span>
+                <span className="font-semibold text-slate-600">{formatYen(report.billing.girlfriendPaidActual)}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span>未収/過収</span>
+                <span className="font-semibold text-emerald-700">
+                  {formatSignedYen(report.billing.girlfriendPayment - report.billing.girlfriendPaidActual)}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span>分割払い補正</span>
+                <span className="font-semibold text-slate-600">
+                  -{formatYen(installmentDeduction)}
+                </span>
+              </div>
             </div>
             <div className="mt-6 rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3 text-xs text-slate-500">
               <div className="flex items-center justify-between">
@@ -766,6 +892,56 @@ const App = () => {
                 </div>
               </div>
             </div>
+          </div>
+        </section>
+
+        <section className="mt-8">
+          <div
+            className="rounded-3xl border border-white/70 bg-white/80 backdrop-blur"
+            style={{ boxShadow: 'var(--shadow)' }}
+          >
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-6 py-4">
+              <div className="flex items-center gap-2">
+                <Receipt className="h-5 w-5 text-indigo-500" />
+                <h2 className="font-display text-lg font-semibold text-slate-900">サブスク明細（通信費）</h2>
+              </div>
+              <div className="text-xs text-slate-500">
+                合計 {formatYen(report.subscription.total)} / {report.subscription.details.length} 件
+              </div>
+            </div>
+            {report.subscription.details.length === 0 ? (
+              <div className="px-6 py-8 text-center text-sm text-slate-500">
+                該当するサブスクはありません。
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-sm">
+                  <thead className="bg-slate-50 text-xs uppercase text-slate-400">
+                    <tr>
+                      <th className="px-6 py-3 font-medium">日付</th>
+                      <th className="px-6 py-3 font-medium">内容 / メモ</th>
+                      <th className="px-6 py-3 text-right font-medium">金額</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {report.subscription.details.map((item, index) => (
+                      <tr key={`${item.date}-${index}`} className="transition hover:bg-white/80">
+                        <td className="px-6 py-4 text-slate-500 whitespace-nowrap">{item.date}</td>
+                        <td className="px-6 py-4">
+                          <div className="font-medium text-slate-900 line-clamp-2" title={item.content}>
+                            {item.content}
+                          </div>
+                          {item.memo && <div className="mt-1 text-xs text-slate-400 italic">{item.memo}</div>}
+                        </td>
+                        <td className="px-6 py-4 text-right font-semibold text-slate-700 whitespace-nowrap">
+                          -{formatYen(item.amountAbs)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         </section>
 
