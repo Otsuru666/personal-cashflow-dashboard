@@ -501,29 +501,7 @@ const App = () => {
     );
   }
 
-  if (!report || !report.hasRows) {
-    return (
-      <div className="ambient-bg min-h-screen">
-        <div className="section-shell flex min-h-screen flex-col items-center justify-center gap-4 px-6 text-center">
-          <p className="text-sm text-slate-500">選択された年月のデータが見つかりませんでした。</p>
-          <div className="flex flex-col gap-3 sm:flex-row">
-            <button
-              onClick={fetchData}
-              className="rounded-2xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-lg shadow-emerald-200 transition hover:bg-emerald-700"
-            >
-              再読み込み
-            </button>
-            <button
-              onClick={() => setIsConfiguring(true)}
-              className="rounded-2xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-500 transition hover:bg-white/80"
-            >
-              URLを変更
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
+  if (!report) return null;
 
   const ledgerNetPositive = report.ledger.net >= 0;
   const actualNetPositive = report.actual.net >= 0;
@@ -602,6 +580,15 @@ const App = () => {
             </button>
           </div>
         </header>
+
+        {!report.hasRows && (
+          <div
+            className="mt-6 rounded-3xl border border-amber-100 bg-amber-50/80 px-5 py-4 text-sm text-amber-900"
+            style={{ boxShadow: 'var(--shadow)' }}
+          >
+            選択された年月のデータが見つかりませんでした。年間Overviewで全体の収支を確認できます。
+          </div>
+        )}
 
         <section className="mt-8 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
           <div
