@@ -48,6 +48,9 @@ const INSTALLMENT_ITEMS = [
   { name: 'コンサル費用', amount: 20686, completionDate: '2026年5月27日' }
 ];
 const INSTALLMENT_DEFAULT_TOTAL = INSTALLMENT_ITEMS.reduce((sum, item) => sum + item.amount, 0);
+const VIEW_MONTHLY = 'monthly';
+const VIEW_ANNUAL = 'annual';
+const VIEW_STORAGE_KEY = 'dashboard_view';
 
 const COLORS = ['#0F766E', '#10B981', '#F59E0B', '#F97316', '#60A5FA', '#34D399', '#F43F5E'];
 const DEFAULT_GAS_URL =
@@ -266,6 +269,9 @@ const App = () => {
   const [errorMessage, setErrorMessage] = useState('');
   const [gasUrl, setGasUrl] = useState(initialGasUrl);
   const [isConfiguring, setIsConfiguring] = useState(!initialGasUrl);
+  const [activeView, setActiveView] = useState(
+    () => readLocalStorage(VIEW_STORAGE_KEY) || VIEW_MONTHLY
+  );
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
   const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth() + 1);
   const [girlfriendAdvanceInput, setGirlfriendAdvanceInput] = useState(() => {
@@ -536,6 +542,32 @@ const App = () => {
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-3">
+            <div className="flex items-center rounded-full border border-white/70 bg-white/70 p-1 text-xs font-semibold text-slate-500">
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveView(VIEW_MONTHLY);
+                  writeLocalStorage(VIEW_STORAGE_KEY, VIEW_MONTHLY);
+                }}
+                className={`rounded-full px-3 py-1 transition ${
+                  activeView === VIEW_MONTHLY ? 'bg-emerald-600 text-white' : 'text-slate-500'
+                }`}
+              >
+                月次ビュー
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveView(VIEW_ANNUAL);
+                  writeLocalStorage(VIEW_STORAGE_KEY, VIEW_ANNUAL);
+                }}
+                className={`rounded-full px-3 py-1 transition ${
+                  activeView === VIEW_ANNUAL ? 'bg-emerald-600 text-white' : 'text-slate-500'
+                }`}
+              >
+                年間ビュー
+              </button>
+            </div>
             <div
               className="flex items-center gap-2 rounded-2xl border border-white/70 bg-white/80 px-3 py-2 text-sm text-slate-600"
               style={{ boxShadow: 'var(--shadow)' }}
@@ -552,17 +584,19 @@ const App = () => {
                   </option>
                 ))}
               </select>
-              <select
-                className="bg-transparent text-sm font-semibold text-slate-600 focus:outline-none"
-                value={selectedMonth}
-                onChange={(event) => setSelectedMonth(parseInt(event.target.value, 10))}
-              >
-                {Array.from({ length: 12 }, (_, index) => index + 1).map((month) => (
-                  <option key={month} value={month}>
-                    {month}月
-                  </option>
-                ))}
-              </select>
+              {activeView === VIEW_MONTHLY && (
+                <select
+                  className="bg-transparent text-sm font-semibold text-slate-600 focus:outline-none"
+                  value={selectedMonth}
+                  onChange={(event) => setSelectedMonth(parseInt(event.target.value, 10))}
+                >
+                  {Array.from({ length: 12 }, (_, index) => index + 1).map((month) => (
+                    <option key={month} value={month}>
+                      {month}月
+                    </option>
+                  ))}
+                </select>
+              )}
             </div>
             <button
               onClick={fetchData}
@@ -590,7 +624,9 @@ const App = () => {
           </div>
         )}
 
-        <section className="mt-8 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+        {activeView === VIEW_MONTHLY && (
+          <>
+            <section className="mt-8 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
           <div
             className="animate-rise rounded-3xl border border-white/70 bg-white/80 p-5 backdrop-blur"
             style={{ boxShadow: 'var(--shadow)', animationDelay: '0ms' }}
@@ -791,113 +827,125 @@ const App = () => {
             </div>
           </div>
         </section>
+          </>
+        )}
 
-        <section className="mt-8">
-          <div
-            className="rounded-3xl border border-white/70 bg-white/80 backdrop-blur"
-            style={{ boxShadow: 'var(--shadow)' }}
-          >
-            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-6 py-4">
-              <div className="flex items-center gap-2">
-                <Calendar className="h-5 w-5 text-emerald-600" />
-                <h2 className="font-display text-lg font-semibold text-slate-900">年間Overview</h2>
+        {activeView === VIEW_ANNUAL && (
+          <section className="mt-8">
+            <div
+              className="rounded-3xl border border-white/70 bg-white/80 backdrop-blur"
+              style={{ boxShadow: 'var(--shadow)' }}
+            >
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-6 py-4">
+                <div className="flex items-center gap-2">
+                  <Calendar className="h-5 w-5 text-emerald-600" />
+                  <h2 className="font-display text-lg font-semibold text-slate-900">年間Overview</h2>
+                </div>
+                <div className="text-xs text-slate-500">{selectedYear}年の月次収支一覧</div>
               </div>
-              <div className="text-xs text-slate-500">{selectedYear}年の月次収支一覧</div>
+              {overviewRows.length === 0 ? (
+                <div className="px-6 py-8 text-center text-sm text-slate-500">
+                  年間Overviewの対象データがありません。
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs sm:text-sm">
+                    <thead className="bg-slate-50 text-xs uppercase text-slate-400">
+                      <tr>
+                        <th className="px-4 py-3 font-medium">月</th>
+                        <th className="px-4 py-3 text-right font-medium">収入</th>
+                        <th className="px-4 py-3 text-right font-medium">支出</th>
+                        <th className="px-4 py-3 text-right font-medium">調整</th>
+                        <th className="px-4 py-3 text-right font-medium">帳簿上収支</th>
+                        <th className="px-4 py-3 text-right font-medium">彼女の支払額</th>
+                        <th className="px-4 py-3 text-right font-medium">入金済み</th>
+                        <th className="px-4 py-3 text-right font-medium">未収/過収</th>
+                        <th className="px-4 py-3 text-right font-medium">分割補正</th>
+                        <th className="px-4 py-3 text-right font-medium">実質収支</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {overviewRows.map((row) => (
+                        <tr key={`overview-${row.month}`} className="transition hover:bg-white/80">
+                          <td className="px-4 py-3 text-slate-500 whitespace-nowrap">{row.month}月</td>
+                          <td className="px-4 py-3 text-right text-emerald-700">
+                            {formatYen(row.income)}
+                          </td>
+                          <td className="px-4 py-3 text-right text-orange-600">
+                            {formatYen(row.expense)}
+                          </td>
+                          <td className="px-4 py-3 text-right text-slate-500">
+                            {formatSignedYen(row.adjust)}
+                          </td>
+                          <td className={`px-4 py-3 text-right font-semibold ${getSignedClass(row.ledgerNet)}`}>
+                            {formatSignedYen(row.ledgerNet)}
+                          </td>
+                          <td className="px-4 py-3 text-right text-emerald-700">
+                            {formatYen(row.girlfriendPayment)}
+                          </td>
+                          <td className="px-4 py-3 text-right text-slate-600">
+                            {formatYen(row.girlfriendPaidActual)}
+                          </td>
+                          <td className={`px-4 py-3 text-right font-semibold ${getSignedClass(row.unpaidGap)}`}>
+                            {formatSignedYen(row.unpaidGap)}
+                          </td>
+                          <td className="px-4 py-3 text-right text-slate-500">
+                            {formatDeduction(row.installmentDeduction)}
+                          </td>
+                          <td className={`px-4 py-3 text-right font-semibold ${getSignedClass(row.actualNet)}`}>
+                            {formatSignedYen(row.actualNet)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    {overviewTotals && (
+                      <tfoot className="bg-slate-50">
+                        <tr>
+                          <td className="px-4 py-3 font-semibold text-slate-600">合計</td>
+                          <td className="px-4 py-3 text-right font-semibold text-emerald-700">
+                            {formatYen(overviewTotals.income)}
+                          </td>
+                          <td className="px-4 py-3 text-right font-semibold text-orange-600">
+                            {formatYen(overviewTotals.expense)}
+                          </td>
+                          <td className="px-4 py-3 text-right font-semibold text-slate-500">
+                            {formatSignedYen(overviewTotals.adjust)}
+                          </td>
+                          <td className={`px-4 py-3 text-right font-semibold ${getSignedClass(overviewTotals.ledgerNet)}`}>
+                            {formatSignedYen(overviewTotals.ledgerNet)}
+                          </td>
+                          <td className="px-4 py-3 text-right font-semibold text-emerald-700">
+                            {formatYen(overviewTotals.girlfriendPayment)}
+                          </td>
+                          <td className="px-4 py-3 text-right font-semibold text-slate-600">
+                            {formatYen(overviewTotals.girlfriendPaidActual)}
+                          </td>
+                          <td className={`px-4 py-3 text-right font-semibold ${getSignedClass(overviewTotals.unpaidGap)}`}>
+                            {formatSignedYen(overviewTotals.unpaidGap)}
+                          </td>
+                          <td className="px-4 py-3 text-right font-semibold text-slate-500">
+                            {formatDeduction(overviewTotals.installmentDeduction)}
+                          </td>
+                          <td className={`px-4 py-3 text-right font-semibold ${getSignedClass(overviewTotals.actualNet)}`}>
+                            {formatSignedYen(overviewTotals.actualNet)}
+                          </td>
+                        </tr>
+                      </tfoot>
+                    )}
+                  </table>
+                </div>
+              )}
             </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs sm:text-sm">
-                <thead className="bg-slate-50 text-xs uppercase text-slate-400">
-                  <tr>
-                    <th className="px-4 py-3 font-medium">月</th>
-                    <th className="px-4 py-3 text-right font-medium">収入</th>
-                    <th className="px-4 py-3 text-right font-medium">支出</th>
-                    <th className="px-4 py-3 text-right font-medium">調整</th>
-                    <th className="px-4 py-3 text-right font-medium">帳簿上収支</th>
-                    <th className="px-4 py-3 text-right font-medium">彼女の支払額</th>
-                    <th className="px-4 py-3 text-right font-medium">入金済み</th>
-                    <th className="px-4 py-3 text-right font-medium">未収/過収</th>
-                    <th className="px-4 py-3 text-right font-medium">分割補正</th>
-                    <th className="px-4 py-3 text-right font-medium">実質収支</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {overviewRows.map((row) => (
-                    <tr key={`overview-${row.month}`} className="transition hover:bg-white/80">
-                      <td className="px-4 py-3 text-slate-500 whitespace-nowrap">{row.month}月</td>
-                      <td className="px-4 py-3 text-right text-emerald-700">
-                        {formatYen(row.income)}
-                      </td>
-                      <td className="px-4 py-3 text-right text-orange-600">
-                        {formatYen(row.expense)}
-                      </td>
-                      <td className="px-4 py-3 text-right text-slate-500">
-                        {formatSignedYen(row.adjust)}
-                      </td>
-                      <td className={`px-4 py-3 text-right font-semibold ${getSignedClass(row.ledgerNet)}`}>
-                        {formatSignedYen(row.ledgerNet)}
-                      </td>
-                      <td className="px-4 py-3 text-right text-emerald-700">
-                        {formatYen(row.girlfriendPayment)}
-                      </td>
-                      <td className="px-4 py-3 text-right text-slate-600">
-                        {formatYen(row.girlfriendPaidActual)}
-                      </td>
-                      <td className={`px-4 py-3 text-right font-semibold ${getSignedClass(row.unpaidGap)}`}>
-                        {formatSignedYen(row.unpaidGap)}
-                      </td>
-                      <td className="px-4 py-3 text-right text-slate-500">
-                        {formatDeduction(row.installmentDeduction)}
-                      </td>
-                      <td className={`px-4 py-3 text-right font-semibold ${getSignedClass(row.actualNet)}`}>
-                        {formatSignedYen(row.actualNet)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-                {overviewTotals && (
-                  <tfoot className="bg-slate-50">
-                    <tr>
-                      <td className="px-4 py-3 font-semibold text-slate-600">合計</td>
-                      <td className="px-4 py-3 text-right font-semibold text-emerald-700">
-                        {formatYen(overviewTotals.income)}
-                      </td>
-                      <td className="px-4 py-3 text-right font-semibold text-orange-600">
-                        {formatYen(overviewTotals.expense)}
-                      </td>
-                      <td className="px-4 py-3 text-right font-semibold text-slate-500">
-                        {formatSignedYen(overviewTotals.adjust)}
-                      </td>
-                      <td className={`px-4 py-3 text-right font-semibold ${getSignedClass(overviewTotals.ledgerNet)}`}>
-                        {formatSignedYen(overviewTotals.ledgerNet)}
-                      </td>
-                      <td className="px-4 py-3 text-right font-semibold text-emerald-700">
-                        {formatYen(overviewTotals.girlfriendPayment)}
-                      </td>
-                      <td className="px-4 py-3 text-right font-semibold text-slate-600">
-                        {formatYen(overviewTotals.girlfriendPaidActual)}
-                      </td>
-                      <td className={`px-4 py-3 text-right font-semibold ${getSignedClass(overviewTotals.unpaidGap)}`}>
-                        {formatSignedYen(overviewTotals.unpaidGap)}
-                      </td>
-                      <td className="px-4 py-3 text-right font-semibold text-slate-500">
-                        {formatDeduction(overviewTotals.installmentDeduction)}
-                      </td>
-                      <td className={`px-4 py-3 text-right font-semibold ${getSignedClass(overviewTotals.actualNet)}`}>
-                        {formatSignedYen(overviewTotals.actualNet)}
-                      </td>
-                    </tr>
-                  </tfoot>
-                )}
-              </table>
-            </div>
-          </div>
-        </section>
+          </section>
+        )}
 
-        <section className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-2">
-          <div
-            className="rounded-3xl border border-white/70 bg-white/80 p-6 backdrop-blur"
-            style={{ boxShadow: 'var(--shadow)' }}
-          >
+        {activeView === VIEW_MONTHLY && (
+          <>
+            <section className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-2">
+              <div
+                className="rounded-3xl border border-white/70 bg-white/80 p-6 backdrop-blur"
+                style={{ boxShadow: 'var(--shadow)' }}
+              >
             <div className="flex items-center gap-2">
               <Receipt className="h-5 w-5 text-orange-500" />
               <h2 className="font-display text-lg font-semibold text-slate-900">支出カテゴリ</h2>
@@ -1025,8 +1073,8 @@ const App = () => {
                 </div>
               </div>
             </div>
-          </div>
-        </section>
+              </div>
+            </section>
 
         <section className="mt-8">
           <div
@@ -1187,6 +1235,8 @@ const App = () => {
             </div>
           </div>
         </section>
+          </>
+        )}
       </div>
     </div>
   );
