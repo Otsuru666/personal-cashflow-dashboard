@@ -182,6 +182,8 @@ const summarizeMonth = (rows, girlfriendAdvanceValue, installmentDeduction) => {
 
     ledgerDetails.push(detail);
 
+    if (!isTargetRow(row)) return;
+
     if (type === TYPE_INCOME) {
       incomeTotal += amountAbs;
       const paymentHintSource = buildHintSource(row['大項目'], row['中項目'], row['内容']);
