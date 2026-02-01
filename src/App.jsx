@@ -42,6 +42,35 @@ const INCOME_HINTS = ['収入', '給与', '給料', '賞与', 'ボーナス', '�
 const EXPENSE_HINTS = ['支出', '出金', '支払', '立替'];
 const ADJUST_HINTS = ['調整', '返金', '振替', '相殺'];
 const COHABITATION_PAYMENT_HINTS = ['同棲費用'];
+const AI_HINTS = [
+  'AI',
+  'ai',
+  'ChatGPT',
+  'chatgpt',
+  'OpenAI',
+  'openai',
+  'Claude',
+  'claude',
+  'Gemini',
+  'gemini',
+  'Copilot',
+  'copilot',
+  'Perplexity',
+  'perplexity',
+  'Midjourney',
+  'midjourney',
+  'DALL-E',
+  'dall-e',
+  'DALL·E',
+  'NotionAI',
+  'notionai',
+  'Stability',
+  'stability',
+  'Anthropic',
+  'anthropic',
+  'Cursor',
+  'cursor'
+];
 const INSTALLMENT_ITEMS = [
   { name: 'オスカー30回分', amount: 6865, completionDate: '2026年7月27日' },
   { name: 'テンピュール', amount: 11973, completionDate: '2027年6月27日' },
@@ -99,6 +128,12 @@ const isSubscriptionRow = (row, type) => {
   const sub = normalizeText(row['中項目']);
   const content = normalizeText(row['内容']);
   return major.includes('通信費') && (sub.includes('サブスク') || content.includes('サブスク'));
+};
+
+const isAiExpenseRow = (row, type) => {
+  if (type !== TYPE_EXPENSE) return false;
+  const hintSource = buildHintSource(row['大項目'], row['中項目'], row['内容'], row['メモ']);
+  return hasHint(hintSource, AI_HINTS);
 };
 
 const getType = (row) => {
@@ -161,6 +196,8 @@ const summarizeMonth = (rows, girlfriendAdvanceValue, installmentDeduction) => {
   const expenseBySubcategory = {};
   const subscriptionDetails = [];
   let subscriptionTotal = 0;
+  const aiDetails = [];
+  let aiTotal = 0;
 
   rows.forEach((row) => {
     const type = getType(row);
@@ -201,6 +238,11 @@ const summarizeMonth = (rows, girlfriendAdvanceValue, installmentDeduction) => {
       if (isSubscriptionRow(row, type)) {
         subscriptionTotal += amountAbs;
         subscriptionDetails.push(detail);
+      }
+
+      if (isAiExpenseRow(row, type)) {
+        aiTotal += amountAbs;
+        aiDetails.push(detail);
       }
 
       if (!subcategory.includes('自費')) {
@@ -257,6 +299,10 @@ const summarizeMonth = (rows, girlfriendAdvanceValue, installmentDeduction) => {
     subscription: {
       total: subscriptionTotal,
       details: subscriptionDetails.sort((a, b) => new Date(b.date) - new Date(a.date))
+    },
+    ai: {
+      total: aiTotal,
+      details: aiDetails.sort((a, b) => new Date(b.date) - new Date(a.date))
     }
   };
 };
@@ -1096,6 +1142,54 @@ const App = () => {
           >
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-6 py-4">
               <div className="flex items-center gap-2">
+                <Sparkles className="h-5 w-5 text-indigo-500" />
+                <h2 className="font-display text-lg font-semibold text-slate-900">AI費用明細</h2>
+              </div>
+              <div className="text-xs text-slate-500">
+                合計 {formatYen(report.ai.total)} / {report.ai.details.length} 件
+              </div>
+            </div>
+            {report.ai.details.length === 0 ? (
+              <div className="px-6 py-8 text-center text-sm text-slate-500">AI費用がありません。</div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-sm">
+                  <thead className="bg-slate-50 text-xs uppercase text-slate-400">
+                    <tr>
+                      <th className="px-6 py-3 font-medium">日付</th>
+                      <th className="px-6 py-3 font-medium">内容 / メモ</th>
+                      <th className="px-6 py-3 text-right font-medium">金額</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {report.ai.details.map((item, index) => (
+                      <tr key={`${item.date}-${index}`} className="transition hover:bg-white/80">
+                        <td className="px-6 py-4 text-slate-500 whitespace-nowrap">{item.date}</td>
+                        <td className="px-6 py-4">
+                          <div className="font-medium text-slate-900 line-clamp-2" title={item.content}>
+                            {item.content}
+                          </div>
+                          {item.memo && <div className="mt-1 text-xs text-slate-400 italic">{item.memo}</div>}
+                        </td>
+                        <td className="px-6 py-4 text-right font-semibold text-slate-700 whitespace-nowrap">
+                          -{formatYen(item.amountAbs)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </section>
+
+        <section className="mt-8">
+          <div
+            className="rounded-3xl border border-white/70 bg-white/80 backdrop-blur"
+            style={{ boxShadow: 'var(--shadow)' }}
+          >
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-6 py-4">
+              <div className="flex items-center gap-2">
                 <Receipt className="h-5 w-5 text-indigo-500" />
                 <h2 className="font-display text-lg font-semibold text-slate-900">サブスク明細（通信費）</h2>
               </div>
@@ -1104,9 +1198,7 @@ const App = () => {
               </div>
             </div>
             {report.subscription.details.length === 0 ? (
-              <div className="px-6 py-8 text-center text-sm text-slate-500">
-                該当するサブスクはありません。
-              </div>
+              <div className="px-6 py-8 text-center text-sm text-slate-500">該当するサブスクはありません。</div>
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-sm">
