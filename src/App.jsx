@@ -69,7 +69,13 @@ const AI_HINTS = [
   'Anthropic',
   'anthropic',
   'Cursor',
-  'cursor'
+  'cursor',
+  'AQUAVOICE',
+  'AquaVoice',
+  'aquavoice',
+  'GOOGLEPLAYJAPAN',
+  'GooglePlayJapan',
+  'googleplayjapan'
 ];
 const INSTALLMENT_ITEMS = [
   { name: 'オスカー30回分', amount: 6865, completionDate: '2026年7月27日' },
