@@ -9,17 +9,6 @@
  * 5. 発行されたURLをダッシュボードの初期設定画面に入力
  */
 
-const RENT_AND_UTILITIES_FIXED = 40000;
-const SHARED_SUBCATEGORIES = [
-  '日用品',
-  'デート（立替）',
-  '外食',
-  '食費',
-  '普段使い（立替）',
-  '旅費'
-];
-const FULL_REIMBURSE_SUBCATEGORY = '立替（全額）';
-
 const TYPE_INCOME = '収入';
 const TYPE_EXPENSE = '支出';
 const TYPE_ADJUST = '調整';
@@ -27,7 +16,10 @@ const TYPE_ADJUST = '調整';
 const INCOME_HINTS = ['収入', '給与', '給料', '賞与', 'ボーナス', '入金'];
 const EXPENSE_HINTS = ['支出', '出金', '支払', '立替'];
 const ADJUST_HINTS = ['調整', '返金', '振替', '相殺'];
-const COHABITATION_PAYMENT_HINTS = ['同棲費用'];
+const SALARY_HINTS = ['給与', '給料'];
+const BONUS_HINTS = ['賞与', 'ボーナス'];
+const VARIABLE_EXPENSE_CATEGORIES = ['趣味・娯楽', '食費', '日用品'];
+const HOBBY_CATEGORY = '趣味・娯楽';
 
 const INSTALLMENT_ITEMS = [
   { name: 'オスカー30回分', amount: 6865, completionDate: '2026年7月27日' },
@@ -102,15 +94,15 @@ function updateOverviewSheets() {
 
     const header = [
       '月',
+      '給与',
+      '賞与',
       '収入',
       '支出',
       '調整',
-      '帳簿上収支',
-      '彼女の支払額',
-      '入金済み',
-      '未収/過収',
-      '分割払い補正',
-      '実質収支'
+      '分割補正',
+      '収支',
+      '固定費',
+      '趣味・娯楽'
     ];
     sheet.getRange(1, 1, 1, header.length).setValues([header]);
 
@@ -118,26 +110,21 @@ function updateOverviewSheets() {
     for (let month = 1; month <= 12; month += 1) {
       const key = `${year}-${month}`;
       const summary = rows.byMonth[key] || createEmptySummary();
-      const config = configMap[key] || { advance: 0, installment: DEFAULT_INSTALLMENT_DEDUCTION };
+      const config = configMap[key] || { installment: DEFAULT_INSTALLMENT_DEDUCTION };
 
-      const sharedHalf = Math.floor(summary.sharedTotal / 2);
-      const advanceHalf = Math.floor(config.advance / 2);
-      const girlfriendPayment = RENT_AND_UTILITIES_FIXED + sharedHalf + summary.fullReimburseTotal - advanceHalf;
-      const ledgerNet = summary.incomeTotal - summary.expenseTotal + summary.adjustTotal;
-      const unpaidGap = girlfriendPayment - summary.girlfriendPaidActual;
-      const actualNet = ledgerNet + unpaidGap - config.installment;
+      const net = summary.incomeTotal - summary.expenseTotal + summary.adjustTotal - config.installment;
 
       values.push([
         month,
+        summary.salaryTotal,
+        summary.bonusTotal,
         summary.incomeTotal,
         summary.expenseTotal,
         summary.adjustTotal,
-        ledgerNet,
-        girlfriendPayment,
-        summary.girlfriendPaidActual,
-        unpaidGap,
         config.installment,
-        actualNet
+        net,
+        summary.fixedExpenseTotal,
+        summary.hobbyTotal
       ]);
     }
 
@@ -174,7 +161,6 @@ function collectRows(sheets) {
       const amountRaw = parseAmount(row[headerMap['金額（円）']]);
       const amountAbs = Math.abs(amountRaw);
       const type = getTypeFromRow(row, headerMap);
-      const subcategory = normalizeText(row[headerMap['中項目']]);
 
       if (type === TYPE_INCOME) {
         summary.incomeTotal += amountAbs;
@@ -183,21 +169,15 @@ function collectRows(sheets) {
           row[headerMap['中項目']],
           row[headerMap['内容']]
         );
-        if (hasHint(hintSource, COHABITATION_PAYMENT_HINTS)) {
-          summary.girlfriendPaidActual += amountAbs;
-        }
+        if (hasHint(hintSource, SALARY_HINTS)) summary.salaryTotal += amountAbs;
+        if (hasHint(hintSource, BONUS_HINTS)) summary.bonusTotal += amountAbs;
       }
 
       if (type === TYPE_EXPENSE) {
         summary.expenseTotal += amountAbs;
-
-        if (!subcategory.includes('自費')) {
-          if (subcategory === FULL_REIMBURSE_SUBCATEGORY) {
-            summary.fullReimburseTotal += amountAbs;
-          } else if (SHARED_SUBCATEGORIES.includes(subcategory)) {
-            summary.sharedTotal += amountAbs;
-          }
-        }
+        const category = normalizeText(row[headerMap['大項目']]);
+        if (VARIABLE_EXPENSE_CATEGORIES.indexOf(category) === -1) summary.fixedExpenseTotal += amountAbs;
+        if (category === HOBBY_CATEGORY) summary.hobbyTotal += amountAbs;
       }
 
       if (type === TYPE_ADJUST) summary.adjustTotal += amountRaw;
@@ -209,7 +189,7 @@ function collectRows(sheets) {
 
 function ensureOverviewConfig(ss, years) {
   const sheet = ensureSheet(ss, OVERVIEW_CONFIG_SHEET);
-  const header = ['年', '月', '彼女の立替入力', '分割払い補正'];
+  const header = ['年', '月', '分割払い補正'];
   if (sheet.getLastRow() === 0) {
     sheet.getRange(1, 1, 1, header.length).setValues([header]);
   }
@@ -220,9 +200,8 @@ function ensureOverviewConfig(ss, years) {
     const year = parseInt(row[0], 10);
     const month = parseInt(row[1], 10);
     if (Number.isNaN(year) || Number.isNaN(month)) return;
-    const installmentRaw = row[3];
+    const installmentRaw = row[2] !== undefined ? row[2] : row[3];
     map[`${year}-${month}`] = {
-      advance: parseAmount(row[2]),
       installment:
         installmentRaw === '' || installmentRaw === null
           ? DEFAULT_INSTALLMENT_DEDUCTION
@@ -234,8 +213,8 @@ function ensureOverviewConfig(ss, years) {
     for (let month = 1; month <= 12; month += 1) {
       const key = `${year}-${month}`;
       if (map[key]) continue;
-      sheet.appendRow([year, month, 0, DEFAULT_INSTALLMENT_DEDUCTION]);
-      map[key] = { advance: 0, installment: DEFAULT_INSTALLMENT_DEDUCTION };
+      sheet.appendRow([year, month, DEFAULT_INSTALLMENT_DEDUCTION]);
+      map[key] = { installment: DEFAULT_INSTALLMENT_DEDUCTION };
     }
   });
 
@@ -307,8 +286,9 @@ function createEmptySummary() {
     incomeTotal: 0,
     expenseTotal: 0,
     adjustTotal: 0,
-    sharedTotal: 0,
-    fullReimburseTotal: 0,
-    girlfriendPaidActual: 0
+    salaryTotal: 0,
+    bonusTotal: 0,
+    fixedExpenseTotal: 0,
+    hobbyTotal: 0
   };
 }

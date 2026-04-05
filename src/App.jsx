@@ -7,8 +7,7 @@ import {
   Receipt,
   RefreshCw,
   Settings,
-  Sparkles,
-  Wallet
+  Sparkles
 } from 'lucide-react';
 import {
   CartesianGrid,
@@ -23,17 +22,6 @@ import {
   YAxis
 } from 'recharts';
 
-const RENT_AND_UTILITIES_FIXED = 40000;
-const SHARED_SUBCATEGORIES = [
-  '日用品',
-  'デート（立替）',
-  '外食',
-  '食費',
-  '普段使い（立替）',
-  '旅費'
-];
-const FULL_REIMBURSE_SUBCATEGORY = '立替（全額）';
-
 const TYPE_INCOME = '収入';
 const TYPE_EXPENSE = '支出';
 const TYPE_ADJUST = '調整';
@@ -41,7 +29,11 @@ const TYPE_ADJUST = '調整';
 const INCOME_HINTS = ['収入', '給与', '給料', '賞与', 'ボーナス', '入金'];
 const EXPENSE_HINTS = ['支出', '出金', '支払', '立替'];
 const ADJUST_HINTS = ['調整', '返金', '振替', '相殺'];
-const COHABITATION_PAYMENT_HINTS = ['同棲費用'];
+const SALARY_HINTS = ['給与', '給料'];
+const BONUS_HINTS = ['賞与', 'ボーナス'];
+const EXCLUDE_INCOME_HINTS = ['シユクリ', 'ユキエ'];
+const VARIABLE_EXPENSE_CATEGORIES = ['趣味・娯楽', '食費', '日用品'];
+const HOBBY_CATEGORY = '趣味・娯楽';
 const AI_HINTS = [
   'AI',
   'ai',
@@ -164,7 +156,6 @@ const formatSignedYen = (value) => {
 const getSignedClass = (value) => (value >= 0 ? 'text-emerald-700' : 'text-orange-700');
 const formatDeduction = (value) => (value ? `-${formatYen(value)}` : formatYen(0));
 
-const getGirlfriendAdvanceKey = (year, month) => `girlfriend_advance_${year}-${month}`;
 const getInstallmentKey = (year, month) => `installment_adjust_${year}-${month}`;
 
 const isTargetRow = (row) => String(row['計算対象'] || '').trim() === '1';
@@ -188,17 +179,16 @@ const buildChartData = (map, limit = 6) => {
   return [...major, { name: 'その他', value: restValue }];
 };
 
-const summarizeMonth = (rows, girlfriendAdvanceValue, installmentDeduction) => {
+const summarizeMonth = (rows, installmentDeduction) => {
   let incomeTotal = 0;
   let expenseTotal = 0;
   let adjustTotal = 0;
-  let sharedTotal = 0;
-  let fullReimburseTotal = 0;
-  let girlfriendPaidActual = 0;
+  let salaryTotal = 0;
+  let bonusTotal = 0;
+  let fixedExpenseTotal = 0;
+  let hobbyTotal = 0;
 
   const ledgerDetails = [];
-  const sharedDetails = [];
-  const fullReimburseDetails = [];
   const expenseBySubcategory = {};
   const subscriptionDetails = [];
   let subscriptionTotal = 0;
@@ -220,7 +210,8 @@ const summarizeMonth = (rows, girlfriendAdvanceValue, installmentDeduction) => {
       type,
       amount: amountRaw,
       amountAbs,
-      memo: row['メモ'] || ''
+      memo: row['メモ'] || '',
+      isTarget: isTargetRow(row)
     };
 
     ledgerDetails.push(detail);
@@ -228,11 +219,12 @@ const summarizeMonth = (rows, girlfriendAdvanceValue, installmentDeduction) => {
     if (!isTargetRow(row)) return;
 
     if (type === TYPE_INCOME) {
+      const contentSource = buildHintSource(row['内容'], row['メモ']);
+      if (hasHint(contentSource, EXCLUDE_INCOME_HINTS)) return;
       incomeTotal += amountAbs;
-      const paymentHintSource = buildHintSource(row['大項目'], row['中項目'], row['内容']);
-      if (hasHint(paymentHintSource, COHABITATION_PAYMENT_HINTS)) {
-        girlfriendPaidActual += amountAbs;
-      }
+      const hintSource = buildHintSource(row['大項目'], row['中項目'], row['内容']);
+      if (hasHint(hintSource, SALARY_HINTS)) salaryTotal += amountAbs;
+      if (hasHint(hintSource, BONUS_HINTS)) bonusTotal += amountAbs;
     }
     if (type === TYPE_EXPENSE) expenseTotal += amountAbs;
     if (type === TYPE_ADJUST) adjustTotal += amountRaw;
@@ -240,6 +232,9 @@ const summarizeMonth = (rows, girlfriendAdvanceValue, installmentDeduction) => {
     if (type === TYPE_EXPENSE) {
       const key = subcategory || category || '未分類';
       expenseBySubcategory[key] = (expenseBySubcategory[key] || 0) + amountAbs;
+
+      if (!VARIABLE_EXPENSE_CATEGORIES.includes(category)) fixedExpenseTotal += amountAbs;
+      if (category === HOBBY_CATEGORY) hobbyTotal += amountAbs;
 
       if (isSubscriptionRow(row, type)) {
         subscriptionTotal += amountAbs;
@@ -250,57 +245,23 @@ const summarizeMonth = (rows, girlfriendAdvanceValue, installmentDeduction) => {
         aiTotal += amountAbs;
         aiDetails.push(detail);
       }
-
-      if (!subcategory.includes('自費')) {
-        if (subcategory === FULL_REIMBURSE_SUBCATEGORY) {
-          fullReimburseTotal += amountAbs;
-          fullReimburseDetails.push(detail);
-        } else if (SHARED_SUBCATEGORIES.includes(subcategory)) {
-          sharedTotal += amountAbs;
-          sharedDetails.push(detail);
-        }
-      }
     }
   });
-
-  const sharedHalf = Math.floor(sharedTotal / 2);
-  const totalBilling = RENT_AND_UTILITIES_FIXED + sharedHalf + fullReimburseTotal;
-  const myAdvanceTotal = RENT_AND_UTILITIES_FIXED + sharedTotal + fullReimburseTotal;
-  const girlfriendAdvanceHalf = Math.floor(girlfriendAdvanceValue / 2);
-  const girlfriendPayment = totalBilling - girlfriendAdvanceHalf;
-  const ledgerNet = incomeTotal - expenseTotal + adjustTotal;
-  const unpaidGap = girlfriendPayment - girlfriendPaidActual;
-  const actualNet = ledgerNet + unpaidGap - installmentDeduction;
 
   return {
     ledger: {
       income: incomeTotal,
       expense: expenseTotal,
       adjust: adjustTotal,
-      net: ledgerNet
+      net: incomeTotal - expenseTotal + adjustTotal
     },
-    billing: {
-      totalBilling,
-      myAdvanceTotal,
-      girlfriendPayment,
-      girlfriendPaidActual,
-      summary: {
-        rent: RENT_AND_UTILITIES_FIXED,
-        shared: sharedTotal,
-        sharedHalf,
-        full: fullReimburseTotal,
-        girlfriendAdvance: girlfriendAdvanceValue,
-        girlfriendAdvanceHalf
-      }
-    },
-    actual: {
-      net: actualNet,
-      gap: unpaidGap - installmentDeduction
-    },
+    salary: salaryTotal,
+    bonus: bonusTotal,
+    fixedExpense: fixedExpenseTotal,
+    hobby: hobbyTotal,
     expenseBySubcategory,
     details: {
-      ledger: ledgerDetails.sort((a, b) => new Date(b.date) - new Date(a.date)),
-      shared: [...sharedDetails, ...fullReimburseDetails].sort((a, b) => new Date(b.date) - new Date(a.date))
+      ledger: ledgerDetails.sort((a, b) => new Date(b.date) - new Date(a.date))
     },
     subscription: {
       total: subscriptionTotal,
@@ -328,9 +289,6 @@ const App = () => {
   );
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
   const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth() + 1);
-  const [girlfriendAdvanceInput, setGirlfriendAdvanceInput] = useState(() => {
-    return readLocalStorage(getGirlfriendAdvanceKey(new Date().getFullYear(), new Date().getMonth() + 1)) || '';
-  });
   const [installmentAdjustInput, setInstallmentAdjustInput] = useState(() => {
     return (
       readLocalStorage(getInstallmentKey(new Date().getFullYear(), new Date().getMonth() + 1)) ??
@@ -338,16 +296,10 @@ const App = () => {
     );
   });
 
-  const girlfriendAdvance = useMemo(() => parseYenInput(girlfriendAdvanceInput), [girlfriendAdvanceInput]);
   const installmentDeduction = useMemo(
     () => parseYenInput(installmentAdjustInput),
     [installmentAdjustInput]
   );
-
-  useEffect(() => {
-    const stored = readLocalStorage(getGirlfriendAdvanceKey(selectedYear, selectedMonth));
-    setGirlfriendAdvanceInput(stored || '');
-  }, [selectedYear, selectedMonth]);
 
   useEffect(() => {
     const stored = readLocalStorage(getInstallmentKey(selectedYear, selectedMonth));
@@ -409,41 +361,39 @@ const App = () => {
   const report = useMemo(() => {
     if (!data) return null;
     const filtered = data.filter((row) => isTargetRow(row) && isSameMonth(row, selectedYear, selectedMonth));
-    const summary = summarizeMonth(filtered, girlfriendAdvance, installmentDeduction);
+    const summary = summarizeMonth(filtered, installmentDeduction);
     return {
       ...summary,
+      netAfterInstallment: summary.ledger.net - installmentDeduction,
       expenseChart: buildChartData(summary.expenseBySubcategory),
       hasRows: filtered.length > 0
     };
-  }, [data, selectedYear, selectedMonth, girlfriendAdvance, installmentDeduction]);
+  }, [data, selectedYear, selectedMonth, installmentDeduction]);
 
   const overviewRows = useMemo(() => {
     if (!data) return [];
     return Array.from({ length: 12 }, (_, index) => {
       const month = index + 1;
       const monthRows = data.filter((row) => isTargetRow(row) && isSameMonth(row, selectedYear, month));
-      const storedAdvance = readLocalStorage(getGirlfriendAdvanceKey(selectedYear, month)) || '';
       const storedInstallment = readLocalStorage(getInstallmentKey(selectedYear, month));
       const installmentValue = storedInstallment ?? String(INSTALLMENT_DEFAULT_TOTAL);
-      const advanceValue = parseYenInput(storedAdvance);
       const installmentDeduction = parseYenInput(installmentValue);
-      const summary = summarizeMonth(monthRows, advanceValue, installmentDeduction);
-      const unpaidGap = summary.billing.girlfriendPayment - summary.billing.girlfriendPaidActual;
+      const summary = summarizeMonth(monthRows, installmentDeduction);
 
       return {
         month,
         income: summary.ledger.income,
         expense: summary.ledger.expense,
         adjust: summary.ledger.adjust,
-        ledgerNet: summary.ledger.net,
-        girlfriendPayment: summary.billing.girlfriendPayment,
-        girlfriendPaidActual: summary.billing.girlfriendPaidActual,
-        unpaidGap,
+        net: summary.ledger.net - installmentDeduction,
         installmentDeduction,
-        actualNet: summary.actual.net
+        salary: summary.salary,
+        bonus: summary.bonus,
+        fixedExpense: summary.fixedExpense,
+        hobby: summary.hobby
       };
     });
-  }, [data, selectedYear, girlfriendAdvanceInput, installmentAdjustInput]);
+  }, [data, selectedYear, installmentAdjustInput]);
 
   const overviewTotals = useMemo(() => {
     if (overviewRows.length === 0) return null;
@@ -452,23 +402,23 @@ const App = () => {
         income: acc.income + row.income,
         expense: acc.expense + row.expense,
         adjust: acc.adjust + row.adjust,
-        ledgerNet: acc.ledgerNet + row.ledgerNet,
-        girlfriendPayment: acc.girlfriendPayment + row.girlfriendPayment,
-        girlfriendPaidActual: acc.girlfriendPaidActual + row.girlfriendPaidActual,
-        unpaidGap: acc.unpaidGap + row.unpaidGap,
+        net: acc.net + row.net,
         installmentDeduction: acc.installmentDeduction + row.installmentDeduction,
-        actualNet: acc.actualNet + row.actualNet
+        salary: acc.salary + row.salary,
+        bonus: acc.bonus + row.bonus,
+        fixedExpense: acc.fixedExpense + row.fixedExpense,
+        hobby: acc.hobby + row.hobby
       }),
       {
         income: 0,
         expense: 0,
         adjust: 0,
-        ledgerNet: 0,
-        girlfriendPayment: 0,
-        girlfriendPaidActual: 0,
-        unpaidGap: 0,
+        net: 0,
         installmentDeduction: 0,
-        actualNet: 0
+        salary: 0,
+        bonus: 0,
+        fixedExpense: 0,
+        hobby: 0
       }
     );
   }, [overviewRows]);
@@ -476,8 +426,7 @@ const App = () => {
   const monthlySeries = useMemo(() => {
     return overviewRows.map((row) => ({
       label: `${row.month}月`,
-      ledgerNet: row.ledgerNet,
-      actualNet: row.actualNet
+      net: row.net
     }));
   }, [overviewRows]);
 
@@ -563,9 +512,7 @@ const App = () => {
 
   if (!report) return null;
 
-  const ledgerNetPositive = report.ledger.net >= 0;
-  const actualNetPositive = report.actual.net >= 0;
-  const gapPositive = report.actual.gap >= 0;
+  const netPositive = report.netAfterInstallment >= 0;
 
   const getAmountClass = (type, amount) => {
     if (type === TYPE_INCOME) return 'text-emerald-600';
@@ -586,13 +533,13 @@ const App = () => {
           <div className="space-y-3">
             <div className="inline-flex items-center gap-2 rounded-full border border-white/70 bg-white/70 px-3 py-1 text-xs font-semibold text-emerald-700">
               <Sparkles className="h-4 w-4" />
-              帳簿上と実質のズレを可視化
+              個人キャッシュフローを可視化
             </div>
             <h1 className="font-display text-3xl font-semibold text-slate-900 md:text-4xl">
               キャッシュフロー・ダッシュボード
             </h1>
             <p className="text-sm text-slate-500">
-              Google Sheets連携で、同棲費用の清算と実質収支をまとめて把握
+              Google Sheets連携で、収支と固定費を一目で把握
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-3">
@@ -697,27 +644,15 @@ const App = () => {
             style={{ boxShadow: 'var(--shadow)', animationDelay: '0ms' }}
           >
             <div className="flex items-center justify-between">
-              <p className="text-xs font-semibold tracking-[0.2em] text-slate-400">帳簿上収支</p>
-              <div
-                className={`rounded-full p-2 ${
-                  ledgerNetPositive ? 'bg-emerald-100 text-emerald-700' : 'bg-orange-100 text-orange-700'
-                }`}
-              >
-                {ledgerNetPositive ? (
-                  <ArrowUpRight className="h-4 w-4" />
-                ) : (
-                  <ArrowDownRight className="h-4 w-4" />
-                )}
+              <p className="text-xs font-semibold tracking-[0.2em] text-slate-400">収入合計</p>
+              <div className="rounded-full bg-emerald-100 p-2 text-emerald-700">
+                <ArrowUpRight className="h-4 w-4" />
               </div>
             </div>
-            <p
-              className={`mt-4 text-2xl font-semibold ${
-                ledgerNetPositive ? 'text-emerald-700' : 'text-orange-700'
-              }`}
-            >
-              {formatSignedYen(report.ledger.net)}
+            <p className="mt-4 text-2xl font-semibold text-emerald-700">
+              {formatYen(report.ledger.income)}
             </p>
-            <p className="mt-2 text-xs text-slate-500">収入 - 支出 + 調整</p>
+            <p className="mt-2 text-xs text-slate-500">今月の収入合計</p>
           </div>
 
           <div
@@ -725,13 +660,29 @@ const App = () => {
             style={{ boxShadow: 'var(--shadow)', animationDelay: '80ms' }}
           >
             <div className="flex items-center justify-between">
-              <p className="text-xs font-semibold tracking-[0.2em] text-slate-400">実質収支</p>
+              <p className="text-xs font-semibold tracking-[0.2em] text-slate-400">賞与額</p>
+              <div className={`rounded-full p-2 ${report.bonus > 0 ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-400'}`}>
+                <Sparkles className="h-4 w-4" />
+              </div>
+            </div>
+            <p className={`mt-4 text-2xl font-semibold ${report.bonus > 0 ? 'text-amber-700' : 'text-slate-400'}`}>
+              {report.bonus > 0 ? formatYen(report.bonus) : 'なし'}
+            </p>
+            <p className="mt-2 text-xs text-slate-500">今月の賞与</p>
+          </div>
+
+          <div
+            className="animate-rise rounded-3xl border border-white/70 bg-white/80 p-5 backdrop-blur"
+            style={{ boxShadow: 'var(--shadow)', animationDelay: '160ms' }}
+          >
+            <div className="flex items-center justify-between">
+              <p className="text-xs font-semibold tracking-[0.2em] text-slate-400">収支</p>
               <div
                 className={`rounded-full p-2 ${
-                  actualNetPositive ? 'bg-emerald-100 text-emerald-700' : 'bg-orange-100 text-orange-700'
+                  netPositive ? 'bg-emerald-100 text-emerald-700' : 'bg-orange-100 text-orange-700'
                 }`}
               >
-                {actualNetPositive ? (
+                {netPositive ? (
                   <ArrowUpRight className="h-4 w-4" />
                 ) : (
                   <ArrowDownRight className="h-4 w-4" />
@@ -740,36 +691,12 @@ const App = () => {
             </div>
             <p
               className={`mt-4 text-2xl font-semibold ${
-                actualNetPositive ? 'text-emerald-700' : 'text-orange-700'
+                netPositive ? 'text-emerald-700' : 'text-orange-700'
               }`}
             >
-              {formatSignedYen(report.actual.net)}
+              {formatSignedYen(report.netAfterInstallment)}
             </p>
-            <p className="mt-2 text-xs text-slate-500">帳簿上 + 彼女の支払額 - 入金済み - 分割控除</p>
-          </div>
-
-          <div
-            className="animate-rise rounded-3xl border border-white/70 bg-white/80 p-5 backdrop-blur"
-            style={{ boxShadow: 'var(--shadow)', animationDelay: '160ms' }}
-          >
-            <div className="flex items-center justify-between">
-              <p className="text-xs font-semibold tracking-[0.2em] text-slate-400">帳簿との差分</p>
-              <div
-                className={`rounded-full p-2 ${
-                  gapPositive ? 'bg-emerald-100 text-emerald-700' : 'bg-orange-100 text-orange-700'
-                }`}
-              >
-                <Sparkles className="h-4 w-4" />
-              </div>
-            </div>
-            <p
-              className={`mt-4 text-2xl font-semibold ${
-                gapPositive ? 'text-emerald-700' : 'text-orange-700'
-              }`}
-            >
-              {formatSignedYen(report.actual.gap)}
-            </p>
-            <p className="mt-2 text-xs text-slate-500">未収/過収と分割控除の影響</p>
+            <p className="mt-2 text-xs text-slate-500">収入 - 支出 + 調整 - 分割補正</p>
           </div>
 
           <div
@@ -777,15 +704,15 @@ const App = () => {
             style={{ boxShadow: 'var(--shadow)', animationDelay: '240ms' }}
           >
             <div className="flex items-center justify-between">
-              <p className="text-xs font-semibold tracking-[0.2em] text-slate-400">彼女の支払額</p>
-              <div className="rounded-full bg-emerald-100 p-2 text-emerald-700">
-                <Wallet className="h-4 w-4" />
+              <p className="text-xs font-semibold tracking-[0.2em] text-slate-400">固定費総額</p>
+              <div className="rounded-full bg-slate-100 p-2 text-slate-600">
+                <Receipt className="h-4 w-4" />
               </div>
             </div>
-            <p className="mt-4 text-2xl font-semibold text-emerald-700">
-              {formatYen(report.billing.girlfriendPayment)}
+            <p className="mt-4 text-2xl font-semibold text-slate-700">
+              {formatYen(report.fixedExpense)}
             </p>
-            <p className="mt-2 text-xs text-slate-500">今月の精算額</p>
+            <p className="mt-2 text-xs text-slate-500">趣味・娯楽・食費・日用品を除く支出</p>
           </div>
         </section>
 
@@ -797,7 +724,7 @@ const App = () => {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-xs font-semibold tracking-[0.2em] text-slate-400">MONTHLY TREND</p>
-                <h2 className="font-display text-lg font-semibold text-slate-900">帳簿上 vs 実質の推移</h2>
+                <h2 className="font-display text-lg font-semibold text-slate-900">月次収支の推移</h2>
               </div>
               <span className="text-xs text-slate-400">{selectedYear}年</span>
             </div>
@@ -815,19 +742,14 @@ const App = () => {
                     formatter={(value) => formatSignedYen(value)}
                     labelFormatter={(label) => `${selectedYear}年${label}`}
                   />
-                  <Line type="monotone" dataKey="ledgerNet" stroke="#0F766E" strokeWidth={3} dot={false} name="帳簿上" />
-                  <Line type="monotone" dataKey="actualNet" stroke="#F59E0B" strokeWidth={3} dot={false} name="実質" />
+                  <Line type="monotone" dataKey="net" stroke="#0F766E" strokeWidth={3} dot={false} name="収支" />
                 </LineChart>
               </ResponsiveContainer>
             </div>
             <div className="mt-4 flex flex-wrap gap-4 text-xs text-slate-500">
               <div className="flex items-center gap-2">
                 <span className="h-2 w-2 rounded-full bg-emerald-600" />
-                帳簿上収支
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="h-2 w-2 rounded-full bg-amber-500" />
-                実質収支
+                収支（分割補正後）
               </div>
             </div>
           </div>
@@ -837,7 +759,7 @@ const App = () => {
             style={{ boxShadow: 'var(--shadow)' }}
           >
             <div className="flex items-center gap-2">
-              <Wallet className="h-5 w-5 text-emerald-600" />
+              <List className="h-5 w-5 text-emerald-600" />
               <h2 className="font-display text-lg font-semibold text-slate-900">帳簿内訳</h2>
             </div>
             <div className="mt-6 space-y-4 text-sm text-slate-600">
@@ -855,8 +777,8 @@ const App = () => {
               </div>
             </div>
             <div className="mt-6 rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-3">
-              <p className="text-xs font-semibold text-emerald-700">帳簿上収支</p>
-              <p className="mt-1 text-xl font-semibold text-emerald-700">{formatSignedYen(report.ledger.net)}</p>
+              <p className="text-xs font-semibold text-emerald-700">収支</p>
+              <p className="mt-1 text-xl font-semibold text-emerald-700">{formatSignedYen(report.netAfterInstallment)}</p>
             </div>
             <div className="mt-6 rounded-2xl border border-slate-100 bg-slate-50 px-4 py-4">
               <div className="flex items-center justify-between text-xs text-slate-500">
@@ -918,21 +840,27 @@ const App = () => {
                     <thead className="bg-slate-50 text-xs uppercase text-slate-400">
                       <tr>
                         <th className="px-4 py-3 font-medium">月</th>
+                        <th className="px-4 py-3 text-right font-medium">給与</th>
+                        <th className="px-4 py-3 text-right font-medium">賞与</th>
                         <th className="px-4 py-3 text-right font-medium">収入</th>
                         <th className="px-4 py-3 text-right font-medium">支出</th>
                         <th className="px-4 py-3 text-right font-medium">調整</th>
-                        <th className="px-4 py-3 text-right font-medium">帳簿上収支</th>
-                        <th className="px-4 py-3 text-right font-medium">彼女の支払額</th>
-                        <th className="px-4 py-3 text-right font-medium">入金済み</th>
-                        <th className="px-4 py-3 text-right font-medium">未収/過収</th>
                         <th className="px-4 py-3 text-right font-medium">分割補正</th>
-                        <th className="px-4 py-3 text-right font-medium">実質収支</th>
+                        <th className="px-4 py-3 text-right font-medium">収支</th>
+                        <th className="px-4 py-3 text-right font-medium">固定費</th>
+                        <th className="px-4 py-3 text-right font-medium">趣味・娯楽</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
                       {overviewRows.map((row) => (
                         <tr key={`overview-${row.month}`} className="transition hover:bg-white/80">
                           <td className="px-4 py-3 text-slate-500 whitespace-nowrap">{row.month}月</td>
+                          <td className="px-4 py-3 text-right text-emerald-700">
+                            {formatYen(row.salary)}
+                          </td>
+                          <td className="px-4 py-3 text-right text-amber-700">
+                            {row.bonus > 0 ? formatYen(row.bonus) : '-'}
+                          </td>
                           <td className="px-4 py-3 text-right text-emerald-700">
                             {formatYen(row.income)}
                           </td>
@@ -942,23 +870,17 @@ const App = () => {
                           <td className="px-4 py-3 text-right text-slate-500">
                             {formatSignedYen(row.adjust)}
                           </td>
-                          <td className={`px-4 py-3 text-right font-semibold ${getSignedClass(row.ledgerNet)}`}>
-                            {formatSignedYen(row.ledgerNet)}
-                          </td>
-                          <td className="px-4 py-3 text-right text-emerald-700">
-                            {formatYen(row.girlfriendPayment)}
-                          </td>
-                          <td className="px-4 py-3 text-right text-slate-600">
-                            {formatYen(row.girlfriendPaidActual)}
-                          </td>
-                          <td className={`px-4 py-3 text-right font-semibold ${getSignedClass(row.unpaidGap)}`}>
-                            {formatSignedYen(row.unpaidGap)}
-                          </td>
                           <td className="px-4 py-3 text-right text-slate-500">
                             {formatDeduction(row.installmentDeduction)}
                           </td>
-                          <td className={`px-4 py-3 text-right font-semibold ${getSignedClass(row.actualNet)}`}>
-                            {formatSignedYen(row.actualNet)}
+                          <td className={`px-4 py-3 text-right font-semibold ${getSignedClass(row.net)}`}>
+                            {formatSignedYen(row.net)}
+                          </td>
+                          <td className="px-4 py-3 text-right text-slate-600">
+                            {formatYen(row.fixedExpense)}
+                          </td>
+                          <td className="px-4 py-3 text-right text-amber-700">
+                            {formatYen(row.hobby)}
                           </td>
                         </tr>
                       ))}
@@ -968,6 +890,12 @@ const App = () => {
                         <tr>
                           <td className="px-4 py-3 font-semibold text-slate-600">合計</td>
                           <td className="px-4 py-3 text-right font-semibold text-emerald-700">
+                            {formatYen(overviewTotals.salary)}
+                          </td>
+                          <td className="px-4 py-3 text-right font-semibold text-amber-700">
+                            {overviewTotals.bonus > 0 ? formatYen(overviewTotals.bonus) : '-'}
+                          </td>
+                          <td className="px-4 py-3 text-right font-semibold text-emerald-700">
                             {formatYen(overviewTotals.income)}
                           </td>
                           <td className="px-4 py-3 text-right font-semibold text-orange-600">
@@ -976,23 +904,17 @@ const App = () => {
                           <td className="px-4 py-3 text-right font-semibold text-slate-500">
                             {formatSignedYen(overviewTotals.adjust)}
                           </td>
-                          <td className={`px-4 py-3 text-right font-semibold ${getSignedClass(overviewTotals.ledgerNet)}`}>
-                            {formatSignedYen(overviewTotals.ledgerNet)}
-                          </td>
-                          <td className="px-4 py-3 text-right font-semibold text-emerald-700">
-                            {formatYen(overviewTotals.girlfriendPayment)}
-                          </td>
-                          <td className="px-4 py-3 text-right font-semibold text-slate-600">
-                            {formatYen(overviewTotals.girlfriendPaidActual)}
-                          </td>
-                          <td className={`px-4 py-3 text-right font-semibold ${getSignedClass(overviewTotals.unpaidGap)}`}>
-                            {formatSignedYen(overviewTotals.unpaidGap)}
-                          </td>
                           <td className="px-4 py-3 text-right font-semibold text-slate-500">
                             {formatDeduction(overviewTotals.installmentDeduction)}
                           </td>
-                          <td className={`px-4 py-3 text-right font-semibold ${getSignedClass(overviewTotals.actualNet)}`}>
-                            {formatSignedYen(overviewTotals.actualNet)}
+                          <td className={`px-4 py-3 text-right font-semibold ${getSignedClass(overviewTotals.net)}`}>
+                            {formatSignedYen(overviewTotals.net)}
+                          </td>
+                          <td className="px-4 py-3 text-right font-semibold text-slate-600">
+                            {formatYen(overviewTotals.fixedExpense)}
+                          </td>
+                          <td className="px-4 py-3 text-right font-semibold text-amber-700">
+                            {formatYen(overviewTotals.hobby)}
                           </td>
                         </tr>
                       </tfoot>
@@ -1057,86 +979,50 @@ const App = () => {
           >
             <div className="flex items-center gap-2">
               <List className="h-5 w-5 text-emerald-600" />
-              <h2 className="font-display text-lg font-semibold text-slate-900">共同生活費サマリー</h2>
+              <h2 className="font-display text-lg font-semibold text-slate-900">固定費・お小遣い</h2>
             </div>
-            <div className="mt-6 space-y-4 text-sm text-slate-600">
-              <div className="flex items-center justify-between">
-                <span>請求額合計</span>
-                <span className="font-semibold text-emerald-700">{formatYen(report.billing.totalBilling)}</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span>自分の立替総額</span>
-                <span className="font-semibold text-slate-700">{formatYen(report.billing.myAdvanceTotal)}</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span>彼女の支払額</span>
-                <span className="font-semibold text-emerald-700">{formatYen(report.billing.girlfriendPayment)}</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span>入金済み</span>
-                <span className="font-semibold text-slate-600">{formatYen(report.billing.girlfriendPaidActual)}</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span>未収/過収</span>
-                <span className="font-semibold text-emerald-700">
-                  {formatSignedYen(report.billing.girlfriendPayment - report.billing.girlfriendPaidActual)}
-                </span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span>分割払い補正</span>
-                <span className="font-semibold text-slate-600">
-                  -{formatYen(installmentDeduction)}
-                </span>
-              </div>
+            <div className="mt-6 rounded-2xl border border-slate-100 bg-slate-50 px-4 py-4">
+              <p className="text-xs font-semibold text-slate-600">固定費総額</p>
+              <p className="mt-1 text-xl font-semibold text-slate-700">{formatYen(report.fixedExpense)}</p>
+              <p className="mt-2 text-xs text-slate-400">趣味・娯楽・食費・日用品を除く全支出</p>
+              {(() => {
+                const breakdown = {};
+                report.details.ledger.forEach((item) => {
+                  if (!item.isTarget) return;
+                  if (item.type !== TYPE_EXPENSE) return;
+                  if (VARIABLE_EXPENSE_CATEGORIES.includes(item.category)) return;
+                  const key = item.category || '未分類';
+                  breakdown[key] = (breakdown[key] || 0) + item.amountAbs;
+                });
+                const entries = Object.entries(breakdown).sort((a, b) => b[1] - a[1]);
+                if (entries.length === 0) return null;
+                return (
+                  <div className="mt-3 space-y-1.5 border-t border-slate-200 pt-3">
+                    {entries.map(([cat, amount]) => (
+                      <div key={cat} className="flex items-center justify-between text-xs text-slate-500">
+                        <span>{cat}</span>
+                        <span className="font-medium text-slate-600">{formatYen(amount)}</span>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
             </div>
-            <div className="mt-6 rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3 text-xs text-slate-500">
-              <div className="flex items-center justify-between">
-                <span>家賃・光熱費(固定)</span>
-                <span>{formatYen(report.billing.summary.rent)}</span>
-              </div>
-              <div className="mt-2 flex items-center justify-between">
-                <span>共同生活費(総額)</span>
-                <span>{formatYen(report.billing.summary.shared)}</span>
-              </div>
-              <div className="mt-2 flex items-center justify-between">
-                <span>折半負担(50%)</span>
-                <span>{formatYen(report.billing.summary.sharedHalf)}</span>
-              </div>
-              <div className="mt-2 flex items-center justify-between">
-                <span>立替全額(100%)</span>
-                <span>{formatYen(report.billing.summary.full)}</span>
-              </div>
-              <div className="mt-2 flex items-center justify-between">
-                <span>彼女の立替入力</span>
-                <span>{formatYen(report.billing.summary.girlfriendAdvance)}</span>
-              </div>
-              <div className="mt-2 flex items-center justify-between">
-                <span>差引(折半分)</span>
-                <span>-{formatYen(report.billing.summary.girlfriendAdvanceHalf)}</span>
-              </div>
-            </div>
-            <div className="mt-6 rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-4">
-              <div className="flex flex-col gap-3 text-sm">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-semibold text-emerald-700">彼女の立替入力</span>
-                  <span className="text-xs text-emerald-700">折半分が差し引かれます</span>
+            {(() => {
+              const disposable = report.ledger.income - report.fixedExpense;
+              const disposablePositive = disposable >= 0;
+              return (
+                <div className={`mt-4 rounded-2xl border px-4 py-4 ${disposablePositive ? 'border-emerald-100 bg-emerald-50' : 'border-orange-100 bg-orange-50'}`}>
+                  <p className={`text-xs font-semibold ${disposablePositive ? 'text-emerald-700' : 'text-orange-700'}`}>自由に使える金額</p>
+                  <p className={`mt-1 text-xl font-semibold ${disposablePositive ? 'text-emerald-700' : 'text-orange-700'}`}>{formatSignedYen(disposable)}</p>
+                  <p className={`mt-2 text-xs ${disposablePositive ? 'text-emerald-600' : 'text-orange-600'}`}>収入 {formatYen(report.ledger.income)} - 固定費 {formatYen(report.fixedExpense)}</p>
                 </div>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="text"
-                    inputMode="numeric"
-                    className="w-full rounded-2xl border border-emerald-100 bg-white px-4 py-2 text-right text-sm text-slate-600 focus:border-emerald-300 focus:outline-none"
-                    placeholder="例: 12000"
-                    value={girlfriendAdvanceInput}
-                    onChange={(event) => {
-                      const cleaned = event.target.value.replace(/[^0-9]/g, '');
-                      setGirlfriendAdvanceInput(cleaned);
-                      writeLocalStorage(getGirlfriendAdvanceKey(selectedYear, selectedMonth), cleaned);
-                    }}
-                  />
-                  <span className="text-xs font-semibold text-emerald-700">円</span>
-                </div>
-              </div>
+              );
+            })()}
+            <div className="mt-4 rounded-2xl border border-amber-100 bg-amber-50 px-4 py-4">
+              <p className="text-xs font-semibold text-amber-700">趣味・娯楽（お小遣い変動費）</p>
+              <p className="mt-1 text-xl font-semibold text-amber-700">{formatYen(report.hobby)}</p>
+              <p className="mt-2 text-xs text-amber-600">今月の趣味・娯楽の実績</p>
             </div>
               </div>
             </section>
@@ -1289,62 +1175,6 @@ const App = () => {
             </div>
           </div>
 
-          <div
-            className="rounded-3xl border border-white/70 bg-white/80 backdrop-blur"
-            style={{ boxShadow: 'var(--shadow)' }}
-          >
-            <div className="flex items-center gap-2 border-b border-slate-100 px-6 py-4">
-              <Receipt className="h-5 w-5 text-orange-500" />
-              <h2 className="font-display text-lg font-semibold text-slate-900">共同生活費明細</h2>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-sm">
-                <thead className="bg-slate-50 text-xs uppercase text-slate-400">
-                  <tr>
-                    <th className="px-6 py-3 font-medium">日付</th>
-                    <th className="px-6 py-3 font-medium">内容 / メモ</th>
-                    <th className="px-6 py-3 font-medium">中項目</th>
-                    <th className="px-6 py-3 text-right font-medium">金額</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {report.details.shared.length === 0 ? (
-                    <tr>
-                      <td className="px-6 py-6 text-center text-sm text-slate-500" colSpan={4}>
-                        共同生活費の対象データがありません。
-                      </td>
-                    </tr>
-                  ) : (
-                    report.details.shared.map((item, index) => (
-                      <tr key={`${item.date}-${index}`} className="transition hover:bg-white/80">
-                        <td className="px-6 py-4 text-slate-500 whitespace-nowrap">{item.date}</td>
-                        <td className="px-6 py-4">
-                          <div className="font-medium text-slate-900 line-clamp-2" title={item.content}>
-                            {item.content}
-                          </div>
-                          {item.memo && <div className="mt-1 text-xs text-slate-400 italic">{item.memo}</div>}
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap">
-                          <span
-                            className={`rounded-full px-2 py-1 text-[10px] font-semibold ${
-                              item.subcategory === FULL_REIMBURSE_SUBCATEGORY
-                                ? 'bg-emerald-100 text-emerald-700'
-                                : 'bg-blue-100 text-blue-700'
-                            }`}
-                          >
-                            {item.subcategory}
-                          </span>
-                        </td>
-                        <td className="px-6 py-4 text-right font-semibold text-slate-700 whitespace-nowrap">
-                          {formatYen(item.amountAbs)}
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
         </section>
           </>
         )}
